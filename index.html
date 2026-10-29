@@ -330,8 +330,8 @@ body.inside .rail { opacity: 1; transform: none; pointer-events: auto; }
 .helpchips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
 .helpchips .sub { font-size: 12.5px; margin-right: 2px; }
 .helpchips .chip { font-size: 12.5px; padding: 4px 11px; }
-.linkbtn { border: 0; background: none; padding: 0; font-weight: 600; color: var(--ink); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; text-align: left; }
-.linkbtn:hover { color: var(--brand); text-decoration-color: currentColor; }
+.linkbtn { border: 0; background: none; padding: 0; font-weight: 600; color: var(--ink); text-decoration: none; text-align: left; }
+.linkbtn:hover { color: var(--brand); }
 .hold { display: grid; }
 .hrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px 0; border-top: 1px solid var(--line); }
 .hrow:first-child { border-top: 0; padding-top: 2px; }
@@ -801,7 +801,10 @@ function paintHome() {
   const w = wealth(), k = kinds(), any = k.stock || k.bank || k.cash || k.estate;
   const firstPaint = !$("ringbox").dataset.painted; $("ringbox").dataset.painted = "1";
   $("ringbox").innerHTML = ringsSVG(true) + `<div class="center">${any ? `<span class="big num">${w.fin ? w.score : "–"}</span><span class="lbl">원칙 점수</span>` : `<span class="big" style="font-size:15px;font-weight:500;line-height:1.3">+ 를 눌러<br>자산 연결</span>`}</div>`;
-  $("stats").innerHTML = any ? `<button type="button" data-ring="asset"><span class="k">${k.bank || k.estate ? "내 순자산" : "내 주식"}</span><b class="num">${man(k.bank || k.estate ? w.net : w.stock)}</b></button><button type="button" data-ring="today"><span class="k">오늘</span><b class="num ${cls(w.day)}">${w.ps.length ? `${sman(w.day)} <span style="font-size:12px;font-weight:500">(${pct(w.dayPct)})</span>` : "–"}</b></button><button type="button" data-ring="asset"><span class="k">연결</span><b class="sm">${[k.stock && "주식", k.bank && "예적금", k.cash && "현금", k.estate && "부동산"].filter(Boolean).join(" · ") || "–"}</b></button>` : `<button type="button" data-act="link"><span class="k">한 번에</span><b>자산 연결</b></button><button type="button" data-act="upload"><span class="k">사진 한 장</span><b>잔고 올리기</b></button><button type="button" data-act="demo"><span class="k">바로 체험</span><b>예시 잔고</b></button>`;
+  // 링 아래 숫자 3개: 내 주식 · 전일 대비 수익 · 지난 달 대비 수익 (지난 달은 30거래일 전 평가금액과 비교, 가상 흐름)
+  const h = w.ps.length ? balHistory() : [], m30 = h.length ? h[h.length - 1].v - h[0].v : 0, m30p = h.length && h[0].v ? (m30 / h[0].v) * 100 : 0;
+  const statPct = (v, p) => `${sman(v)} <span style="font-size:12px;font-weight:500">(${pct(p)})</span>`;
+  $("stats").innerHTML = any ? `<button type="button" data-ring="asset"><span class="k">내 주식</span><b class="num">${w.ps.length ? man(w.stock) : "–"}</b></button><button type="button" data-ring="today"><span class="k">전일 대비 수익</span><b class="num ${cls(w.day)}">${w.ps.length ? statPct(w.day, w.dayPct) : "–"}</b></button><button type="button" data-ring="today"><span class="k">지난 달 대비 수익</span><b class="num ${cls(m30)}">${h.length ? statPct(m30, m30p) : "–"}</b></button>` : `<button type="button" data-act="link"><span class="k">한 번에</span><b>자산 연결</b></button><button type="button" data-act="upload"><span class="k">사진 한 장</span><b>잔고 올리기</b></button><button type="button" data-act="demo"><span class="k">바로 체험</span><b>예시 잔고</b></button>`;
   if (firstPaint) { const arcs = [...$("ringbox").querySelectorAll(".arc")]; arcs.forEach((a) => { a.dataset.final = a.getAttribute("stroke-dasharray"); a.setAttribute("stroke-dasharray", "0 " + a.dataset.final.split(" ")[1]); }); requestAnimationFrame(() => requestAnimationFrame(() => arcs.forEach((a) => a.setAttribute("stroke-dasharray", a.dataset.final)))); }
   $("legend").innerHTML = RINGS.map((rg) => `<button type="button" data-ring="${rg.id}"><i style="background:${rg.color}"></i>${rg.name} <b>${rg.id === "asset" ? `${Object.values(k).filter(Boolean).length}/4` : rg.id === "rule" ? (w.fin ? w.score + "점" : "–") : w.ps.length ? `${w.ups}/${w.ps.length}` : "–"}</b></button>`).join("");
   $("rail").innerHTML = RINGS.map((rg, i) => `${i ? `<span class="link${current && RINGS.findIndex((x) => x.id === current) >= i ? " on" : ""}"><i></i></span>` : ""}<button type="button" data-ring="${rg.id}" aria-current="${current === rg.id}">${oneRing(rg.id)}<span>${rg.name}</span></button>`).join("");
@@ -1378,8 +1381,11 @@ function stockTick() {
 function paintStats() {
   const w = wealth(), k = kinds(); if (!(k.stock || k.bank || k.cash || k.estate)) return;
   const b = $("stats")?.querySelectorAll("b"); if (!b?.length) return;
-  b[0].textContent = man(k.bank || k.estate ? w.net : w.stock);
-  if (b[1] && w.ps.length) { b[1].textContent = sman(w.day); b[1].className = "num " + cls(w.day); }
+  if (!w.ps.length) return;
+  const h = balHistory(), m30 = h[h.length - 1].v - h[0].v, m30p = h[0].v ? (m30 / h[0].v) * 100 : 0;
+  const put = (el, v, p) => { if (!el) return; el.innerHTML = `${sman(v)} <span style="font-size:12px;font-weight:500">(${pct(p)})</span>`; el.className = "num " + cls(v); };
+  b[0].textContent = man(w.stock);
+  put(b[1], w.day, w.dayPct); put(b[2], m30, m30p);
 }
 const mktPill = () => { const m = marketStatus(); return `<button type="button" class="mktp ${m.cls}" data-ask="주식은 언제 사고팔 수 있어요?" title="한국 시간 기준 · 공휴일 미반영 · 누르면 거래 시간(프리·애프터마켓 포함)"><i aria-hidden="true"></i><b>${m.label}</b><span class="num" data-clock>${hmsNow()}</span><span class="sub2">${m.sub}</span></button>`; };
 function paintMkt() { const el = $("mktLine"); if (el) el.innerHTML = mktPill(); }
