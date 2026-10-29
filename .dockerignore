@@ -1,0 +1,6 @@
+context/
+samples/
+.claude/
+*.md
+Eugene_Rings.html
+sample-balance.html
