@@ -86,7 +86,8 @@ body.inside .rail { opacity: 1; transform: none; pointer-events: auto; }
 .ring-hit:hover + .ring-hl, .ring-hit:focus-visible + .ring-hl { opacity: .18; }
 .ring-hl { fill: none; stroke: var(--ink); opacity: 0; pointer-events: none; transition: opacity .2s; }
 .arc { fill: none; stroke-linecap: round; transition: stroke-dasharray 1.1s cubic-bezier(.2, .8, .2, 1), stroke-dashoffset 1.1s cubic-bezier(.2, .8, .2, 1); }
-.ringbox svg .arc { filter: none; }
+.ringbox svg { filter: drop-shadow(0 10px 22px rgba(20, 22, 30, .10)); }
+.ring-hit:hover ~ .arc { opacity: 1; }
 .center { position: absolute; inset: 0; display: grid; place-content: center; pointer-events: none; gap: 0; }
 .center .lbl { font-size: 11px; color: var(--muted); }
 .center .big { font-size: clamp(22px, 6vw, 30px); font-weight: 600; letter-spacing: -.03em; line-height: 1.1; text-align: center; }
@@ -783,14 +784,22 @@ function balHistory() {
 // ══════════ 링 SVG ══════════
 const R = { asset: 52, rule: 42, today: 32 };
 function arc(r, p, color, w, extra = "") { const C = 2 * Math.PI * r; return `<circle cx="60" cy="60" r="${r}" class="arc" stroke="${color}" stroke-width="${w}" stroke-dasharray="${(C * Math.max(0, Math.min(1, p))).toFixed(2)} ${C.toFixed(2)}" transform="rotate(-90 60 60)" ${extra}/>`; }
+// 첫 화면 링: 그라데이션 선 + 은은한 빛 + 바깥 눈금. 가운데는 비워 둠 (점수 표시 없음)
 function ringsSVG(interactive) {
-  const w = wealth(), k = kinds(), W = 4.5, C = 2 * Math.PI * R.asset, seg = C / 4 - 6;
+  const w = wealth(), k = kinds(), W = { asset: 5.2, rule: 4.6, today: 4 }, C = 2 * Math.PI * R.asset, seg = C / 4 - 6;
   const kOrder = ["stock", "bank", "cash", "estate"], kName = { stock: "주식", bank: "예적금", cash: "현금", estate: "부동산" };
-  let s = `<svg viewBox="0 0 120 120" role="img" aria-label="자산 링 ${kOrder.filter((x) => k[x]).length}/4 연결, 원칙 ${w.score}점, 오늘 오른 종목 ${w.ups}/${w.ps.length}">`;
-  ["asset", "rule", "today"].forEach((id) => (s += `<circle cx="60" cy="60" r="${R[id]}" fill="none" stroke="var(--track)" stroke-width="${W}"/>`));
-  kOrder.forEach((x, i) => { if (k[x]) s += `<circle cx="60" cy="60" r="${R.asset}" class="arc" stroke="var(--brand)" stroke-width="${W}" stroke-dasharray="${seg.toFixed(2)} ${(C - seg).toFixed(2)}" stroke-dashoffset="${(-i * C / 4).toFixed(2)}" transform="rotate(-86 60 60)" opacity="${1 - i * 0.14}"><title>${kName[x]}</title></circle>`; });
-  s += arc(R.rule, w.score / 100, "var(--silver)", W) + arc(R.today, w.ps.length ? w.ups / w.ps.length : 0, "var(--today)", W);
-  if (interactive) RINGS.forEach((rg) => (s += `<circle cx="60" cy="60" r="${R[rg.id]}" class="ring-hit" stroke-width="${W + 6}" data-ring="${rg.id}" tabindex="0" role="button" aria-label="${rg.name} 링 열기"/><circle cx="60" cy="60" r="${R[rg.id]}" class="ring-hl" stroke-width="${W + 6}"/>`));
+  const grad = (id, c) => `<linearGradient id="g-${id}" gradientUnits="userSpaceOnUse" x1="10" y1="10" x2="110" y2="110"><stop offset="0" style="stop-color:${c};stop-opacity:.55"/><stop offset=".55" style="stop-color:${c}"/><stop offset="1" style="stop-color:${c};stop-opacity:.75"/></linearGradient>`;
+  let s = `<svg viewBox="0 0 120 120" role="img" aria-label="자산 링 ${kOrder.filter((x) => k[x]).length}/4 연결, 원칙 ${w.score}점, 오늘 오른 종목 ${w.ups}/${w.ps.length}">
+    <defs>${grad("asset", "var(--brand)")}${grad("rule", "var(--silver)")}${grad("today", "var(--today)")}
+      <radialGradient id="g-core" cx="50%" cy="42%" r="60%"><stop offset="0" style="stop-color:var(--surface)"/><stop offset="1" style="stop-color:var(--sunk)"/></radialGradient>
+      <filter id="ring-glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="1.4" result="b"/><feComponentTransfer in="b" result="s"><feFuncA type="linear" slope=".55"/></feComponentTransfer><feMerge><feMergeNode in="s"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+    <circle cx="60" cy="60" r="25" fill="url(#g-core)"/>
+    <circle cx="60" cy="60" r="59.4" fill="none" stroke="var(--line)" stroke-width=".5" opacity=".9"/>
+    ${Array.from({ length: 60 }, (_, i) => { const a = (i * 6 - 90) * Math.PI / 180, big = i % 5 === 0, r1 = big ? 56.4 : 57.4; return `<line x1="${(60 + r1 * Math.cos(a)).toFixed(2)}" y1="${(60 + r1 * Math.sin(a)).toFixed(2)}" x2="${(60 + 58.6 * Math.cos(a)).toFixed(2)}" y2="${(60 + 58.6 * Math.sin(a)).toFixed(2)}" stroke="var(--silver)" stroke-width="${big ? ".7" : ".4"}" opacity="${big ? ".55" : ".3"}"/>`; }).join("")}`;
+  ["asset", "rule", "today"].forEach((id) => (s += `<circle cx="60" cy="60" r="${R[id]}" fill="none" stroke="var(--track)" stroke-width="${W[id]}" opacity=".75"/>`));
+  kOrder.forEach((x, i) => { if (k[x]) s += `<circle cx="60" cy="60" r="${R.asset}" class="arc" stroke="url(#g-asset)" stroke-width="${W.asset}" stroke-dasharray="${seg.toFixed(2)} ${(C - seg).toFixed(2)}" stroke-dashoffset="${(-i * C / 4).toFixed(2)}" transform="rotate(-86 60 60)" opacity="${1 - i * 0.12}" filter="url(#ring-glow)"><title>${kName[x]}</title></circle>`; });
+  s += arc(R.rule, w.score / 100, "url(#g-rule)", W.rule, 'filter="url(#ring-glow)"') + arc(R.today, w.ps.length ? w.ups / w.ps.length : 0, "url(#g-today)", W.today, 'filter="url(#ring-glow)"');
+  if (interactive) RINGS.forEach((rg) => (s += `<circle cx="60" cy="60" r="${R[rg.id]}" class="ring-hit" stroke-width="${W[rg.id] + 6}" data-ring="${rg.id}" tabindex="0" role="button" aria-label="${rg.name} 링 열기"/><circle cx="60" cy="60" r="${R[rg.id]}" class="ring-hl" stroke-width="${W[rg.id] + 6}"/>`));
   return s + "</svg>";
 }
 function oneRing(id, size = 30, w = 3.4) { const W = wealth(), k = kinds(), p = id === "asset" ? Object.values(k).filter(Boolean).length / 4 : id === "rule" ? W.score / 100 : W.ps.length ? W.ups / W.ps.length : 0, rg = RINGS.find((x) => x.id === id), r = 60 - w * 2.4 - 2; return `<svg viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="${r}" fill="none" stroke="var(--track)" stroke-width="${w * 2.4}"/>${arc(r, p, rg.color, w * 2.4)}</svg>`; }
@@ -800,7 +809,7 @@ const mini = () => `<svg viewBox="0 0 120 120" aria-hidden="true"><circle cx="60
 function paintHome() {
   const w = wealth(), k = kinds(), any = k.stock || k.bank || k.cash || k.estate;
   const firstPaint = !$("ringbox").dataset.painted; $("ringbox").dataset.painted = "1";
-  $("ringbox").innerHTML = ringsSVG(true) + `<div class="center">${any ? `<span class="big num">${w.fin ? w.score : "–"}</span><span class="lbl">원칙 점수</span>` : `<span class="big" style="font-size:15px;font-weight:500;line-height:1.3">+ 를 눌러<br>자산 연결</span>`}</div>`;
+  $("ringbox").innerHTML = ringsSVG(true) + `<div class="center">${any ? "" : `<span class="big" style="font-size:15px;font-weight:500;line-height:1.3">+ 를 눌러<br>자산 연결</span>`}</div>`;
   // 링 아래 숫자 3개: 내 주식 · 전일 대비 수익 · 지난 달 대비 수익 (지난 달은 30거래일 전 평가금액과 비교, 가상 흐름)
   const h = w.ps.length ? balHistory() : [], m30 = h.length ? h[h.length - 1].v - h[0].v : 0, m30p = h.length && h[0].v ? (m30 / h[0].v) * 100 : 0;
   const statPct = (v, p) => `${sman(v)} <span style="font-size:12px;font-weight:500">(${pct(p)})</span>`;
