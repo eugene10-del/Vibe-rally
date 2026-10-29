@@ -98,6 +98,10 @@ body.inside .rail { opacity: 1; transform: none; pointer-events: auto; }
 .ring-hl { fill: none; stroke: var(--ink); opacity: 0; pointer-events: none; transition: opacity .2s; }
 .arc { fill: none; stroke-linecap: round; transition: stroke-dasharray 1.1s cubic-bezier(.2, .8, .2, 1), stroke-dashoffset 1.1s cubic-bezier(.2, .8, .2, 1); }
 .ringbox svg .arc { filter: none; }
+.center-link { pointer-events: auto; display: grid; justify-items: center; gap: 6px; border: 0; background: none; color: var(--ink); font-size: 15px; font-weight: 600; line-height: 1.3; padding: 18px 22px; border-radius: 50%; cursor: pointer; }
+.center-link .cl-plus { width: 44px; height: 44px; border-radius: 50%; background: var(--brand); color: var(--brand-ink); display: grid; place-items: center; font-size: 28px; font-weight: 500; line-height: 1; box-shadow: 0 6px 18px color-mix(in srgb, var(--brand) 35%, transparent); transition: transform .15s; }
+.center-link:hover .cl-plus { transform: scale(1.08); }
+.center-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .center { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; pointer-events: none; gap: 1px; text-align: center; }
 .center .lbl { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .center .big { font-size: clamp(17px, 4.6vw, 23px); font-weight: 700; letter-spacing: -.03em; line-height: 1.15; white-space: nowrap; transition: color .2s; }
@@ -941,7 +945,7 @@ const mini = () => `<svg viewBox="0 0 120 120" aria-hidden="true"><defs><radialG
 function paintHome() {
   const w = wealth(), k = kinds(), any = k.stock || k.bank || k.cash || k.estate;
   const firstPaint = !$("ringbox").dataset.painted; $("ringbox").dataset.painted = "1";
-  $("ringbox").innerHTML = ringsSVG(true) + `<div class="center">${any ? "" : `<span class="big" style="font-size:15px;font-weight:500;line-height:1.3">+ 를 눌러<br>자산 연결</span>`}</div>`;
+  $("ringbox").innerHTML = ringsSVG(true) + `<div class="center">${any ? "" : `<button type="button" class="center-link" data-act="link" aria-label="자산 연결하기"><span class="cl-plus" aria-hidden="true">+</span><span>눌러서<br>자산 연결</span></button>`}</div>`;
   if (any) centerDefault();
   const dot = (c) => `<i class="dot" style="background:${c}"></i>`, gcH = goalCalc(w), itH = interestSum();
   $("pbnote").innerHTML = any ? pbNoteHtml(w) : "";
