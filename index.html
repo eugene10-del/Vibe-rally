@@ -407,6 +407,14 @@ body.inside .rail { opacity: 1; transform: none; pointer-events: auto; }
 .ph { grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; gap: 10px; }
 @media (max-width: 480px) { .ph { grid-template-columns: minmax(0, 1fr); } }
 /* ── AI 답변 블록 · 연결 상태 ── */
+.srcs { display: grid; gap: 4px; margin-top: 10px; }
+.srcs .sub { font-size: 12px; }
+.srcs a { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; color: var(--ink); text-decoration: none; border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; font-size: 13.5px; min-width: 0; }
+.srcs a span { min-width: 0; overflow-wrap: anywhere; }
+.srcs a:hover { border-color: var(--brand); color: var(--brand); }
+.srcs a small { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.ai-live { margin: 8px 0 0 42px; color: var(--muted); }
+@media (max-width: 560px) { .ai-live { margin-left: 0; } }
 .aians { border: 1px solid var(--line); border-left: 3px solid var(--brand); border-radius: 12px; padding: 12px 14px; display: grid; gap: 8px; background: var(--surface); }
 .ai-h { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .ai-h .sub { font-size: 12.5px; }
@@ -1000,7 +1008,8 @@ function route(q) {
   { const h = !s && helpOf(q); if (h) return ansHelp(h); }
   if (GUARD.test(q)) return ansAdvisory(q);
   if (/리포트|요약/.test(n)) return ansReport(s);
-  const term = GLOSSARY.find((g) => n.includes(norm(g.term))); if (term && !s) return ansTerm(term);
+  // 용어 사전은 뜻을 묻는 질문에만 (예: "PER이 뭐예요?"). "지금 기준금리 몇 %야?"처럼 최신 값을 묻는 건 자료 밖이라 AI·웹 검색으로 넘김
+  const term = GLOSSARY.find((g) => n.includes(norm(g.term))); if (term && !s && (/뭐|무엇|뜻|이란|의미|설명|알려/.test(n) || n.length <= norm(term.term).length + 4)) return ansTerm(term);
   if (s && (n.length <= s.name.length + 8 || /요즘|어때|이슈/.test(n))) return ansWhy(s);
   return null;
 }
@@ -1040,6 +1049,45 @@ tiles는 2~4개.`;
   aiCache.set(key, out); return out;
 }
 
+// ══════════ 자료에 없는 질문: 웹 검색으로 찾아 요약하고 출처를 붙임 (웹 검색이 되는 연결에서만) ══════════
+// 답 끝의 "출처:" 줄들에서 "제목 - URL"을 뽑고, 본문에 섞인 URL도 출처로 모음
+function parseSources(text) {
+  const i = text.search(/\n\s*출처\s*[:：]/);
+  const body = i < 0 ? text : text.slice(0, i), tail = i < 0 ? "" : text.slice(i), sources = [];
+  const clean = (u) => u.replace(/[.,;:'"”’)\]]+$/, "");
+  const add = (title, url) => { if (url && !sources.some((s) => s.url === url)) sources.push({ title: (title || "").trim() || url.replace(/^https?:\/\//, "").split("/")[0], url }); };
+  (tail.match(/[^\n]*https?:\/\/[^\s)\]]+/g) || []).forEach((line) => {
+    const url = clean((line.match(/https?:\/\/[^\s)\]]+/) || [""])[0]);
+    add(line.replace(/https?:\/\/[^\s)\]]+/, "").replace(/^\s*(출처\s*[:：])?\s*[-–·•\d.)]*\s*/, "").replace(/\s*[-–:(\[]\s*$/, ""), url);
+  });
+  (body.match(/https?:\/\/[^\s)\]]+/g) || []).forEach((u) => add("", clean(u)));
+  return { body: body.replace(/\(?https?:\/\/[^\s)\]]+\)?/g, "").replace(/[ \t]+\n/g, "\n").trim(), sources };
+}
+const sourcesHtml = (list) => list.length ? `<div class="srcs"><span class="sub">출처</span>${list.slice(0, 5).map((s) => { let host = ""; try { host = new URL(s.url).hostname.replace(/^www\./, ""); } catch {} return `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"><span>${esc(s.title.length > 70 ? s.title.slice(0, 70) + "…" : s.title)}</span><small>${esc(host)}</small></a>`; }).join("")}</div>` : "";
+async function askWeb(q, ae) {
+  const wait = ae.querySelector(".headline.wait"); if (wait) wait.textContent = "앱 자료에 없는 질문이라 웹을 검색해서 정리하는 중…";
+  const live = document.createElement("p"); live.className = "ai-t ai-live"; ae.append(live);
+  const prompt = `당신은 유진투자증권 고객 한 사람만을 위한 AI PB입니다. 이 질문은 앱 자료에 없는 내용이라 웹 검색으로 최신 정보를 찾아 정리합니다. 규칙:
+1. 웹 검색으로 확인한 내용만 쓰고, 찾지 못한 것은 모른다고 합니다. 숫자와 날짜는 출처에 있는 것만 씁니다.
+2. 사라, 팔라, 손절하라, 더 사라고 말하지 않습니다. 가격과 시점을 예측하지 않고 특정 종목이나 상품을 권하지 않습니다.
+3. 존댓말, 짧은 문장, 마크다운 기호 없이 3~5문장으로 요약합니다. 첫 문장이 결론입니다.
+4. 마지막에 "출처:" 줄을 쓰고, 그 아래에 한 줄에 하나씩 "제목 - URL" 형식으로 2~3개 적습니다. 찾은 출처가 없으면 "출처: 없음"이라고 씁니다.
+5. 판단이 필요한 질문이면 판단은 고객님 몫이며 담당 PB와 상담할 수 있다고 안내합니다.
+[수준] ${LEVEL_PROMPT[prefs.level]}
+[참고: 고객 상황] ${ctxFor(q).slice(0, 1500)}
+
+고객 질문: ${q}`;
+  const t0 = performance.now();
+  const res = await sample(prompt, { web: true, modelTier: "default", cache: false, onText: ({ text }) => { live.textContent = aiFix(parseSources(text).body).t; } });
+  live.remove();
+  const p = parseSources(res.text || ""), f = aiFix(p.body), sources = [...p.sources, ...(res.sources || []).filter((s) => !p.sources.some((x) => x.url === s.url))];
+  if (!f.t) throw { code: "empty_completion" };
+  const first = (f.t.split(/(?<=[.!?요다])\s+/).find(Boolean) || f.t).trim();
+  return { headline: first.length > 60 ? first.slice(0, 60) + "…" : first, src: "웹 검색", live: true, labels: ["웹 검색 요약", `${Math.max(1, Math.round((performance.now() - t0) / 1000))}초`, f.n ? `권유 표현 ${f.n}곳 고쳐 씀` : "권유 표현 점검 통과"],
+    viz: `<p class="ai-t">${esc(f.t)}</p>${sourcesHtml(sources)}<p class="src" style="margin-top:8px">웹에서 찾은 내용을 요약한 것으로, 앱의 가상 자료가 아니에요. 투자 권유가 아니며 최신 내용은 출처에서 다시 확인해 주세요.</p>`,
+    tiles: /사도|팔|손절|추천|전망|오를|떨어/.test(norm(q)) ? [pbTile()] : [], follow: ["오늘 내 잔고 어때?", "뭐 사야 해?"] };
+}
+
 // ══════════ 답 그리기 ══════════
 function srcLabel(src) { if (!src || src === "안내") return ""; const m = /일반/.test(src) ? "자료 밖 일반 설명" : /계산/.test(src) ? "내 기준 계산" : /잔고/.test(src) ? "출처: 내 자산" : /뉴스/.test(src) ? "출처: 시장·뉴스" : /리포트/.test(src) ? "출처: 리포트" : /용어/.test(src) ? "출처: 용어 사전" : "출처: " + src; return `<span class="lb">${esc(m)}</span>`; }
 function paint(el, a) {
@@ -1055,7 +1103,11 @@ async function ask(q) {
   let a = route(q);
   if (!a) {
     ae.classList.add("thinking"); ae.innerHTML = `<div class="a-head">${mini()}<p class="headline wait">내 자산과 시장을 함께 보고 있어요…</p></div>`; qe.scrollIntoView({ behavior: "smooth", block: "start" });
-    if (sample) { try { a = await askAI(q); } catch { a = null; } }
+    if (sample) {
+      // 관련 자료가 없는 질문: 웹 검색이 되는 연결(사내 서버 · 내 PC Claude Code · 내 API 키)이면 웹에서 찾아 요약하고 출처를 붙임
+      if (sample.web) { try { a = await askWeb(q, ae); } catch { a = null; ae.querySelector(".ai-live")?.remove(); } }
+      if (!a) { try { a = await askAI(q); } catch { a = null; } }
+    }
     ae.classList.remove("thinking");
     if (!a) a = { headline: sample ? "AI 답변을 받지 못했어요" : "이 질문은 AI 연결 후 답해 드려요", sub: sample ? "잠시 후 다시 물어보시거나 아래 질문을 눌러 보세요" : "아래 ‘AI 연결’로 Claude를 연결하거나, 지금 바로 답할 수 있는 질문을 눌러 보세요", src: "안내", tiles: [...(sample ? [] : [T("AI 연결", "연결하기", `<p>이 주소에는 AI 서버가 없어요. 본인의 Claude API 키를 넣으면 이 브라우저에서 바로 Claude가 답해요.</p><div class="acts"><button class="btn brand" type="button" data-act="aikey">AI 연결하기</button></div>`, "brand")]), ...STARTER.concat(["뭐 사야 해?", "예금 만기 언제야?"]).slice(0, 3).map((s) => T("이렇게 물어보세요", s, `<div class="acts"><button class="btn" type="button" data-ask="${esc(s)}">물어보기</button></div>`))] };
   }
@@ -1066,7 +1118,7 @@ async function ask(q) {
 
 // ══════════ AI 답변: 질문할 때마다 Claude가 내 자료로 쉬운 말 설명을 덧붙임 ══════════
 const AI_STATE = { via: "none" }; // claude: claude.ai 게시 페이지, server: FastAPI(/api/ai), none: 연결 전
-const AI_LABEL = { claude: "Claude 연결됨", server: "Claude 연결됨 (사내 서버)", key: "Claude 연결됨 (내 API 키)", none: "AI 연결 전" };
+const AI_LABEL = { claude: "Claude 연결됨", server: "Claude 연결됨 (사내 서버)", local: "Claude 연결됨 (내 PC Claude Code)", key: "Claude 연결됨 (내 API 키)", none: "AI 연결 전" };
 function paintAiState() { document.querySelectorAll("[data-aistate]").forEach((el) => { el.className = "aist " + (AI_STATE.via === "none" ? "off" : "on"); el.innerHTML = AI_STATE.via === "none" || AI_STATE.via === "key" ? `<button type="button" class="aist-btn" data-act="aikey"><i aria-hidden="true"></i>${AI_LABEL[AI_STATE.via]}${AI_STATE.via === "none" ? " · 연결하기" : ""}</button>` : `<i aria-hidden="true"></i>${AI_LABEL[AI_STATE.via]}`; }); }
 // 답에 사라·팔라·수익 보장 같은 말이 섞이면 화면에 내기 전에 고쳐 씀
 const AI_FIX = [[/(지금|꼭|반드시)?\s*(사세요|매수하세요|담으세요)/g, "살지는 고객님이 판단하실 일이에요"], [/(지금|꼭|반드시)?\s*(파세요|매도하세요|정리하세요)/g, "팔지는 고객님이 판단하실 일이에요"], [/추천(합니다|해요|드려요|드립니다)/g, "참고로 알려 드려요"], [/수익(을|이)?\s*(보장|확실)\S*/g, "수익은 보장되지 않아요."], [/(반드시|무조건|확실히)\s*(오릅|오를|올라)\S*/g, "오를지는 아무도 확실히 알 수 없어요."]];
@@ -1101,16 +1153,18 @@ ${ctxFor(q)}
   } finally { box.querySelector(".ai-stop")?.remove(); }
 }
 // 사내 서버(FastAPI)로 띄웠을 때: /api/ai 를 claude.use("sample")과 같은 모양으로 감쌈
-function serverSample() {
+// base가 비어 있으면 같은 주소의 서버(FastAPI), 아니면 다른 주소의 서버(예: 시연 PC의 로컬 도우미 http://localhost:8000)
+function serverSample(base = "") {
+  const url = (p) => (base ? base.replace(/\/+$/, "") + "/" : "") + p;
   const b64 = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok({ media_type: f.type || "image/jpeg", data: String(r.result).split(",")[1] }); r.onerror = no; r.readAsDataURL(f); });
   const call = async (input, o = {}, json) => {
     const images = o.images ? await Promise.all([...(o.images.length != null ? o.images : [o.images])].map(b64)) : [];
-    let r; try { r = await fetch("api/ai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input, json_mode: json, tier: o.modelTier || "default", images }), signal: o.signal }); }
+    let r; try { r = await fetch(url("api/ai"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input, json_mode: json, tier: o.modelTier || "default", images, web: !!o.web }), signal: o.signal }); }
     catch (e) { throw { code: e.name === "AbortError" ? "cancelled" : "upstream_error" }; }
-    const d = await r.json().catch(() => ({})); if (!r.ok) throw { code: d.detail?.code || "upstream_error" };
-    o.onText?.({ text: d.text, delta: d.text }); return json ? d.json : { text: d.text, truncated: d.truncated };
+    const d = await r.json().catch(() => ({})); if (!r.ok) throw { code: d.detail?.code || d.code || "upstream_error", text: d.detail?.text || d.text };
+    o.onText?.({ text: d.text, delta: d.text }); return json ? d.json : { text: d.text, truncated: !!d.truncated, sources: d.sources || [] };
   };
-  const f = (i, o) => call(i, o, false); f.json = (i, o) => call(i, o, true); f.limits = async () => ({ images: { maxCount: 4 } }); return f;
+  const f = (i, o) => call(i, o, false); f.json = (i, o) => call(i, o, true); f.limits = async () => ({ images: { maxCount: 4 } }); f.web = true; return f;
 }
 
 // ══════════ 내 API 키로 연결: GitHub Pages처럼 서버가 없는 주소에서도 브라우저가 Claude에 직접 물어봄 ══════════
@@ -1126,22 +1180,30 @@ async function keySample(key) {
     const last = msgs[msgs.length - 1];
     if (json) last.content += "\n\n답변은 JSON 값 하나로만 쓰세요. 다른 글은 쓰지 마세요.";
     if (o.images) last.content = [...(await Promise.all([...(o.images.length != null ? o.images : [o.images])].slice(0, 4).map(b64))), { type: "text", text: last.content }];
-    let text = "";
+    let text = "", sources = [], truncated = false;
     try {
-      const stream = client.messages.stream({ model: KEY_MODEL, max_tokens: 16000, output_config: { effort: o.modelTier === "quick" ? "low" : "medium" }, messages: msgs }, { signal: o.signal });
+      // 자료에 없는 질문(o.web)은 Anthropic 웹 검색 도구를 켜서 최신 정보를 찾음
+      const tools = o.web ? [{ type: "web_search_20260209", name: "web_search", max_uses: 3 }] : undefined;
+      const stream = client.messages.stream({ model: KEY_MODEL, max_tokens: 16000, output_config: { effort: o.modelTier === "quick" ? "low" : "medium" }, messages: msgs, ...(tools ? { tools } : {}) }, { signal: o.signal });
       stream.on("text", (delta) => { text += delta; o.onText?.({ text, delta }); });
       const fin = await stream.finalMessage();
       if (fin.stop_reason === "refusal") throw { code: "refused" };
+      truncated = fin.stop_reason === "max_tokens";
       text = fin.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+      const add = (title, url) => { if (url && !sources.some((s) => s.url === url)) sources.push({ title: title || url, url }); };
+      fin.content.forEach((b) => {
+        if (b.type === "web_search_tool_result" && Array.isArray(b.content)) b.content.forEach((x) => { if (x.type === "web_search_result") add(x.title, x.url); });
+        if (b.type === "text" && Array.isArray(b.citations)) b.citations.forEach((c) => add(c.title, c.url));
+      });
     } catch (e) {
       if (e?.code) throw e;
       const s = e?.status, n = e?.name || "";
       throw { code: /Abort/.test(n) ? "cancelled" : s === 401 ? "bad_key" : s === 429 ? "rate_limited" : "upstream_error", text };
     }
-    if (!json) return { text, truncated: false };
+    if (!json) return { text, truncated, sources };
     try { return JSON.parse(text); } catch { const m = text.match(/[\[{][\s\S]*[\]}]/); if (m) return JSON.parse(m[0]); throw { code: "invalid_json", text }; }
   };
-  const f = (i, o) => call(i, o, false); f.json = (i, o) => call(i, o, true); f.limits = async () => ({ images: { maxCount: 4 } }); return f;
+  const f = (i, o) => call(i, o, false); f.json = (i, o) => call(i, o, true); f.limits = async () => ({ images: { maxCount: 4 } }); f.web = true; return f;
 }
 function openAiKey(msg = "") {
   const saved = !!store.get(AIKEY);
@@ -1537,15 +1599,24 @@ document.addEventListener("submit", (e) => { if (e.target.id === "estateForm") {
 $("askForm").addEventListener("submit", (e) => { e.preventDefault(); ask($("q").value); });
 $("file").addEventListener("change", (e) => { const f = e.target.files[0]; if (f) analyze(f); e.target.value = ""; });
 fetchLive();
+// 다른 주소의 AI 서버를 쓸 때: 주소 뒤에 ?api=http://localhost:8000 을 붙이면 그 서버를 기억해 둠 (시연 PC의 로컬 도우미용)
+let API_BASE = (() => { try { const p = new URLSearchParams(location.search).get("api"); if (p) { localStorage.setItem("rings.api", p); return p; } return localStorage.getItem("rings.api") || ""; } catch { return ""; } })();
+async function connectApi(base) {
+  const url = (base ? base.replace(/\/+$/, "") + "/" : "") + "api/health";
+  try {
+    const r = await fetch(url, { cache: "no-store" }); if (!r.ok) return false;
+    const d = await r.json(); if (!d.ok) return false;
+    sample = serverSample(base); sampleImages = true; AI_STATE.via = d.kind === "claude-code" ? "local" : "server"; API_BASE = base; aiCache.clear(); paintAiState(); return true;
+  } catch { return false; }
+}
 (async () => {
-  // 1) claude.ai에 게시한 화면이면 Claude 직접 연결  2) FastAPI 사내 서버로 띄우면 /api/ai  3) 둘 다 없으면 준비된 답만
+  // 연결 순서: 1) claude.ai에 게시한 화면이면 Claude 직접 연결  2) ?api= 로 지정한 서버(로컬 도우미)  3) 같은 주소의 FastAPI 서버  4) 이 브라우저에 저장된 내 API 키  5) 모두 없으면 준비된 답만
   paintAiState();
   try { sample = window.claude?.use ? await window.claude.use("sample") : null; } catch { sample = null; }
-  if (sample) AI_STATE.via = "claude";
-  else if (location.protocol.startsWith("http")) { try { const r = await fetch("api/health"); if (r.ok && (await r.json()).ok) { sample = serverSample(); AI_STATE.via = "server"; } } catch {} }
-  // 3) 서버가 없는 주소(GitHub Pages 등)에서는 이 브라우저에 저장된 내 API 키로 연결
-  if (!sample && store.get(AIKEY)) { try { sample = await keySample(store.get(AIKEY)); AI_STATE.via = "key"; } catch { sample = null; } }
-  if (sample) { try { sampleImages = !!(await sample.limits()).images; } catch {} }
+  if (sample) { AI_STATE.via = "claude"; try { sampleImages = !!(await sample.limits()).images; } catch {} }
+  if (!sample && API_BASE) await connectApi(API_BASE);
+  if (!sample && location.protocol.startsWith("http")) await connectApi("");
+  if (!sample && store.get(AIKEY)) { try { sample = await keySample(store.get(AIKEY)); sampleImages = true; AI_STATE.via = "key"; } catch { sample = null; } }
   paintAiState();
 })();
 </script>

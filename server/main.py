@@ -39,6 +39,7 @@ class AiReq(BaseModel):
     json_mode: bool = False
     tier: str = "default"
     images: list[Img] = []
+    web: bool = False  # 앱 자료에 없는 질문이면 Anthropic 웹 검색 도구를 켬
 
 
 def check_limit(ip: str):
@@ -86,6 +87,7 @@ def health():
 @app.post("/api/ai")
 def ai(req: AiReq, request: Request):
     check_limit(request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip())
+    tools = {"tools": [{"type": "web_search_20260209", "name": "web_search", "max_uses": 3}]} if req.web else {}
     try:
         res = client.beta.messages.create(
             model=MODEL,
@@ -94,6 +96,7 @@ def ai(req: AiReq, request: Request):
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
             messages=to_messages(req),
+            **tools,
         )
     except anthropic.RateLimitError:
         raise HTTPException(429, {"code": "rate_limited"})
@@ -106,7 +109,24 @@ def ai(req: AiReq, request: Request):
     text = "".join(b.text for b in res.content if b.type == "text").strip()
     if not text:
         raise HTTPException(502, {"code": "empty_completion"})
-    out = {"text": text, "truncated": res.stop_reason == "max_tokens"}
+    # 웹 검색을 썼으면 찾은 페이지(제목·URL)를 출처로 돌려줌
+    sources: list[dict] = []
+    seen: set[str] = set()
+
+    def add(title, url):
+        if url and url not in seen:
+            seen.add(url)
+            sources.append({"title": title or url, "url": url})
+
+    for b in res.content:
+        if b.type == "web_search_tool_result" and isinstance(b.content, list):
+            for x in b.content:
+                if getattr(x, "type", "") == "web_search_result":
+                    add(getattr(x, "title", None), getattr(x, "url", None))
+        if b.type == "text":
+            for c in getattr(b, "citations", None) or []:
+                add(getattr(c, "title", None), getattr(c, "url", None))
+    out = {"text": text, "truncated": res.stop_reason == "max_tokens", "sources": sources}
     if req.json_mode:
         out["json"] = parse_json(text)
     return out
