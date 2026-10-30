@@ -1394,7 +1394,7 @@ async function ask(q) {
 
 // ══════════ AI 답변: 질문할 때마다 Claude가 내 자료로 쉬운 말 설명을 덧붙임 ══════════
 const AI_STATE = { via: "none" }; // claude: claude.ai 게시 페이지, server: FastAPI(/api/ai), none: 연결 전
-const AI_LABEL = { claude: "유진 AI PB 연결됨", server: "유진 AI PB 연결됨 (사내 서버)", key: "유진 AI PB 연결됨 (내 키)", none: "AI 연결 전" };
+const AI_LABEL = { claude: "유진 AI PB 연결됨", server: "유진 AI PB 연결됨 (사내 서버)", key: "유진 AI PB 연결됨 (내 키)", gemini: "유진 AI PB 연결됨 · 웹 검색", none: "AI 연결 전" };
 function paintAiState() { document.querySelectorAll("[data-aistate]").forEach((el) => { el.className = "aist " + (AI_STATE.via === "none" ? "off" : "on"); el.innerHTML = AI_STATE.via === "none" || AI_STATE.via === "key" ? `<button type="button" class="aist-btn" data-act="aikey"><i aria-hidden="true"></i>${AI_LABEL[AI_STATE.via]}${AI_STATE.via === "none" ? " · 연결하기" : ""}</button>` : `<i aria-hidden="true"></i>${AI_LABEL[AI_STATE.via]}`; }); }
 // 답에 사라·팔라·수익 보장 같은 말이 섞이면 화면에 내기 전에 고쳐 씀
 const AI_FIX = [[/(지금|꼭|반드시)?\s*(사세요|매수하세요|담으세요)/g, "살지는 고객님이 판단하실 일이에요"], [/(지금|꼭|반드시)?\s*(파세요|매도하세요|정리하세요)/g, "팔지는 고객님이 판단하실 일이에요"], [/추천(합니다|해요|드려요|드립니다)/g, "참고로 알려 드려요"], [/수익(을|이)?\s*(보장|확실)\S*/g, "수익은 보장되지 않아요."], [/(반드시|무조건|확실히)\s*(오릅|오를|올라)\S*/g, "오를지는 아무도 확실히 알 수 없어요."]];
@@ -1467,6 +1467,36 @@ async function keySample(key) {
       throw { code: /Abort/.test(n) ? "cancelled" : s === 401 ? "bad_key" : s === 429 ? "rate_limited" : "upstream_error", text };
     }
     if (!json) return { text, truncated: false };
+    try { return JSON.parse(text); } catch { const m = text.match(/[\[{][\s\S]*[\]}]/); if (m) return JSON.parse(m[0]); throw { code: "invalid_json", text }; }
+  };
+  const f = (i, o) => call(i, o, false); f.json = (i, o) => call(i, o, true); f.limits = async () => ({ images: { maxCount: 4 } }); return f;
+}
+
+// ══════════ Gemini 연결: 구글 검색으로 최신 정보를 찾아 답함 (GitHub Pages용, 키는 페이지에 직접 넣음 · 공개됨) ══════════
+const GEMINI_KEY = "", GEMINI_MODEL = "gemini-2.5-flash";
+function geminiSample(key) {
+  const b64 = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok({ inline_data: { mime_type: f.type || "image/jpeg", data: String(r.result).split(",")[1] } }); r.onerror = no; r.readAsDataURL(f); });
+  const call = async (input, o = {}, json) => {
+    const msgs = typeof input === "string" ? [{ role: "user", content: input }] : input.map((t) => ({ role: t.role, content: String(t.content) }));
+    const contents = msgs.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+    const last = contents[contents.length - 1].parts;
+    if (json) last[0].text += "\n\n답변은 JSON 값 하나로만 쓰세요. 코드 블록이나 다른 글은 쓰지 마세요.";
+    else last[0].text += "\n\n자료에 없는 최신 정보가 필요하면 구글 검색으로 찾아 요약하세요.";
+    if (o.images) last.unshift(...(await Promise.all([...(o.images.length != null ? o.images : [o.images])].slice(0, 4).map(b64))));
+    let r, d;
+    try {
+      r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify({ contents, tools: [{ google_search: {} }] }), signal: o.signal });
+      d = await r.json().catch(() => ({}));
+    } catch (e) { throw { code: e.name === "AbortError" ? "cancelled" : "upstream_error" }; }
+    if (!r.ok) throw { code: r.status === 400 || r.status === 403 ? "bad_key" : r.status === 429 ? "rate_limited" : "upstream_error" };
+    const cand = d.candidates?.[0] || {};
+    let text = (cand.content?.parts || []).map((p) => p.text || "").join("").trim();
+    if (!json) {
+      const srcs = [...new Map((cand.groundingMetadata?.groundingChunks || []).filter((c) => c.web).map((c) => [c.web.title, c.web])).values()].slice(0, 3);
+      if (srcs.length) text += ` (출처: ${srcs.map((s) => s.title).join(", ")})`;
+      o.onText?.({ text, delta: text }); return { text, truncated: false };
+    }
+    text = text.replace(/```(json)?/g, "");
     try { return JSON.parse(text); } catch { const m = text.match(/[\[{][\s\S]*[\]}]/); if (m) return JSON.parse(m[0]); throw { code: "invalid_json", text }; }
   };
   const f = (i, o) => call(i, o, false); f.json = (i, o) => call(i, o, true); f.limits = async () => ({ images: { maxCount: 4 } }); return f;
@@ -2070,7 +2100,8 @@ fetchLive();
   try { sample = window.claude?.use ? await window.claude.use("sample") : null; } catch { sample = null; }
   if (sample) AI_STATE.via = "claude";
   else if (location.protocol.startsWith("http")) { try { const r = await fetch("api/health"); if (r.ok && (await r.json()).ok) { sample = serverSample(); AI_STATE.via = "server"; } } catch {} }
-  // 3) 서버가 없는 주소(GitHub Pages 등)에서는 이 브라우저에 저장된 내 API 키로 연결
+  // 3) 서버가 없는 주소(GitHub Pages 등)에서는 페이지에 넣은 Gemini 키, 없으면 이 브라우저에 저장된 내 API 키로 연결
+  if (!sample && GEMINI_KEY) { sample = geminiSample(GEMINI_KEY); AI_STATE.via = "gemini"; }
   if (!sample && store.get(AIKEY)) { try { sample = await keySample(store.get(AIKEY)); AI_STATE.via = "key"; } catch { sample = null; } }
   if (sample) { try { sampleImages = !!(await sample.limits()).images; } catch {} }
   paintAiState();
