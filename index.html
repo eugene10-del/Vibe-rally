@@ -1473,7 +1473,7 @@ async function keySample(key) {
 }
 
 // ══════════ Gemini 연결: 구글 검색으로 최신 정보를 찾아 답함 (GitHub Pages용, 키는 페이지에 직접 넣음 · 공개됨) ══════════
-const GEMINI_KEY = "", GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_KEY = "AQ.Ab8RN6Is8xovlN4SbHlhw2PDP0nztPK04ZJCNK2rKozQp5vQKA", GEMINI_MODEL = "gemini-3.5-flash";
 function geminiSample(key) {
   const b64 = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok({ inline_data: { mime_type: f.type || "image/jpeg", data: String(r.result).split(",")[1] } }); r.onerror = no; r.readAsDataURL(f); });
   const call = async (input, o = {}, json) => {
@@ -1484,8 +1484,10 @@ function geminiSample(key) {
     else last[0].text += "\n\n자료에 없는 최신 정보가 필요하면 구글 검색으로 찾아 요약하세요.";
     if (o.images) last.unshift(...(await Promise.all([...(o.images.length != null ? o.images : [o.images])].slice(0, 4).map(b64))));
     let r, d;
+    const go = (search) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify({ contents, ...(search ? { tools: [{ google_search: {} }] } : {}) }), signal: o.signal });
     try {
-      r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify({ contents, tools: [{ google_search: {} }] }), signal: o.signal });
+      r = await go(true);
+      if (r.status === 429) r = await go(false); // 검색 한도가 없거나 다 쓰면 검색 없이 답함
       d = await r.json().catch(() => ({}));
     } catch (e) { throw { code: e.name === "AbortError" ? "cancelled" : "upstream_error" }; }
     if (!r.ok) throw { code: r.status === 400 || r.status === 403 ? "bad_key" : r.status === 429 ? "rate_limited" : "upstream_error" };
